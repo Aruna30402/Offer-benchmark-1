@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Upload, Building2, Plus, Check } from 'lucide-react';
 import { BankData, Competitor, AnalysisData } from '../App';
+import { perplexityAPI, PerplexityMessage } from '../services/perplexityApi';
 
 // Add missing types
 export interface ChatMessage {
@@ -49,6 +50,7 @@ export function ChatInterface({
   const [customBankUrl, setCustomBankUrl] = useState('');
   const [showCustomForm, setShowCustomForm] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [conversationHistory, setConversationHistory] = useState<PerplexityMessage[]>([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -61,6 +63,30 @@ export function ChatInterface({
   // Initialize with greeting message
   useEffect(() => {
     if (messages.length === 0) {
+      // Initialize conversation history with system prompt
+      const systemPrompt: PerplexityMessage = {
+        role: 'system',
+        content: `You are an expert banking and financial services analyst specializing in offer benchmarking and competitive analysis. You help banks analyze their offer portfolios against competitors.
+
+Your expertise includes:
+- Analyzing bank offers across categories (Dining, Travel, Electronics, Apparel, etc.)
+- Competitive benchmarking and scorecard analysis
+- Merchant partnership strategies
+- Market trends in banking offers and rewards programs
+- UAE banking market specifically (ADCB, FAB, DIB, ENBD, etc.)
+
+You should:
+- Provide actionable insights and recommendations
+- Use banking industry terminology appropriately
+- Focus on competitive advantages and market opportunities
+- Be concise but comprehensive in your analysis
+- Guide users through the benchmarking process step by step
+
+Current context: You're helping a user benchmark their bank's offers against competitors. Start by being helpful and guiding them through the process.`
+      };
+      
+      setConversationHistory([systemPrompt]);
+      
       const greetingMessage: ChatMessage = {
         id: '1',
         type: 'assistant',
@@ -321,7 +347,112 @@ export function ChatInterface({
   const handleAIResponse = async (userInput: string) => {
     setIsTyping(true);
 
-    // Simulate AI processing time
+    try {
+      // Add user message to conversation history
+      const userMessage: PerplexityMessage = {
+        role: 'user',
+        content: userInput
+      };
+      
+      const updatedHistory = [...conversationHistory, userMessage];
+      setConversationHistory(updatedHistory);
+
+      // Check if Perplexity API is configured
+      if (!perplexityAPI.isConfigured()) {
+        // Fallback to original logic if API is not configured
+        handleFallbackResponse(userInput);
+        return;
+      }
+
+      // Get AI response from Perplexity
+      const aiResponse = await perplexityAPI.sendMessage(updatedHistory);
+      
+      // Add AI response to conversation history
+      const assistantMessage: PerplexityMessage = {
+        role: 'assistant',
+        content: aiResponse
+      };
+      
+      setConversationHistory([...updatedHistory, assistantMessage]);
+
+      // Process the AI response and determine next steps
+      const response = processAIResponse(aiResponse, userInput);
+      setMessages(prev => [...prev, response]);
+      setIsTyping(false);
+      
+    } catch (error) {
+      console.error('Error getting AI response:', error);
+      // Fallback to original logic on error
+      handleFallbackResponse(userInput);
+    }
+  };
+
+  const processAIResponse = (aiResponse: string, userInput: string): ChatMessage => {
+    const input = userInput.toLowerCase();
+    
+    // Determine conversation flow based on AI response and user input
+    if (conversationFlow === 'greeting' || input.includes('start') || input.includes('benchmarking')) {
+      setConversationFlow('bank_name');
+      return {
+        id: (Date.now() + 1).toString(),
+        type: 'assistant',
+        content: aiResponse,
+        timestamp: new Date(),
+        actionType: 'bank_name',
+        showBankNameInput: true
+      };
+    } else if (conversationFlow === 'analytics_actions' || conversationFlow === 'competitor_done') {
+      if (input.includes('offers') || input.includes('category')) {
+        handleAnalysisRequest('offers');
+        return {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: aiResponse,
+          timestamp: new Date(),
+          actionType: 'analytics_action'
+        };
+      } else if (input.includes('merchants') || input.includes('merchant')) {
+        handleAnalysisRequest('merchants');
+        return {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: aiResponse,
+          timestamp: new Date(),
+          actionType: 'analytics_action'
+        };
+      } else if (input.includes('scorecard') || input.includes('score')) {
+        handleAnalysisRequest('scorecard');
+        return {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: aiResponse,
+          timestamp: new Date(),
+          actionType: 'analytics_action'
+        };
+      } else {
+        handleAnalysisRequest(userInput);
+        return {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: aiResponse,
+          timestamp: new Date(),
+          actionType: 'custom_query'
+        };
+      }
+    }
+    
+    return {
+      id: (Date.now() + 1).toString(),
+      type: 'assistant',
+      content: aiResponse,
+      timestamp: new Date(),
+      quickReplies: ['Start Benchmarking', 'Ask Question'],
+      actionType: 'greeting'
+    };
+  };
+
+  const handleFallbackResponse = (userInput: string) => {
+    // Original fallback logic
     setTimeout(() => {
       let response: ChatMessage;
       
@@ -368,7 +499,7 @@ export function ChatInterface({
 
       setMessages(prev => [...prev, response]);
       setIsTyping(false);
-    }, 2000);
+    }, 1500);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -649,7 +780,7 @@ export function ChatInterface({
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder="Ask me anything or start benchmarking..."
+            placeholder={perplexityAPI.isConfigured() ? "Ask me anything about banking offers or start benchmarking..." : "Ask me anything or start benchmarking..."}
             className="flex-1 px-4 py-2 border border-[#E1E4E8] rounded-lg focus:ring-2 focus:ring-[#0366D6] focus:border-[#0366D6] text-[#24292F] text-base"
             disabled={isTyping}
           />
@@ -661,6 +792,13 @@ export function ChatInterface({
             <Send className="h-4 w-4" />
           </button>
         </div>
+        
+        {/* API Status Indicator */}
+        {!perplexityAPI.isConfigured() && (
+          <div className="mt-2 text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg border border-amber-200">
+            ⚠️ Perplexity API not configured. Using fallback responses. Add VITE_PERPLEXITY_API_KEY to enable AI-powered chat.
+          </div>
+        )}
       </div>
     </div>
   );
